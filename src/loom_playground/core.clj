@@ -71,14 +71,18 @@
         names (map first pairs)
         scopes (mapcat
                 (fn [name]
-                  [(with-meta name {:tag 'IBind})
-                   `(wrap-scope (Scoped/forType Object))])
+                  (let [tag (resolve (:tag (meta name) 'Object))]
+                    [(with-meta name {:tag 'IBind})
+                     `(wrap-scope (Scoped/forType ~tag))]))
                 names)]
     `(let [~@scopes]
        (in-scope ~bindings ~@body))))
 
-(with-scope [b 2 a 3]
-  (+ @a @b))
+(comment
+  (with-scope [b 2 a 3]
+    (+ @a @b))
+  (with-scope [^Long b 2 ^Long a 3]
+    (+ @a @b)))
 
 
 (def ^ThreadFactory tf (doto (Thread/builder) .virtual .factory))
