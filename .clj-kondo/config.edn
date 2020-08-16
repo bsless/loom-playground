@@ -1,0 +1,2 @@
+{:lint-as {loom-playground.core/with-scope clojure.core/let
+           loom-playground.core/in-scope clojure.core/let}}
