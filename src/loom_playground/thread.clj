@@ -5,85 +5,10 @@
    [clojure.core.async :as async]
    [clojure.reflect :refer [reflect]])
   (:import
-   [java.time Instant]
-   [java.util.concurrent ThreadPoolExecutor ThreadFactory ThreadExecutor Executor Executors]
-   [java.lang Continuation ContinuationScope Thread ThreadGroup Scoped]))
-
-(comment
-  (reflect java.util.concurrent.ThreadExecutor)
-  (.ensureNotShutdown java.util.concurrent.ThreadExecutor)
-  (reflect Continuation)
-  (reflect ContinuationScope)
-
-  (def c (ContinuationScope. "foo"))
-  (reflect c)
-
-  (Continuation/getCurrentContinuation c )
-
-  (def sv (Scoped/forType Object))
-
-  (.bind sv 1)
-  (.get sv)
-
-  (with-open [_ (.bind sv 2)]
-    (.get sv))
-
-  )
-
-(defprotocol IBind
-  (-bind [this v]))
-
-(defn wrap-scope
-  [^Scoped sv]
-  (reify
-    IBind
-    (-bind [this v]
-      (.bind sv v))
-    clojure.lang.IDeref
-    (deref [this] (.get sv))))
-
-(defn validate-scopes
-  [bindings]
-  (assert (vector? bindings) "Bindings must be a vector")
-  (assert (even? (count bindings)) "Must provide even number of bindings")
-  (let [pairs (partition 2 bindings)
-        names (map first pairs)]
-    (assert (= (count names) (count (set names)))
-            "Bindings must be unique when creating scope")))
-
-(defmacro in-scope
-  [bindings & body]
-  (validate-scopes bindings)
-  (let [pairs (partition 2 bindings)
-        names (map first pairs)
-        binds (mapcat
-               (fn [sv v]
-                 ['_ `(-bind ~sv ~v)])
-               names
-               (map second pairs))]
-    `(with-open [~@binds]
-       ~@body)))
-
-(defmacro with-scope
-  [bindings & body]
-  (validate-scopes bindings)
-  (let [pairs (partition 2 bindings)
-        names (map first pairs)
-        scopes (mapcat
-                (fn [name]
-                  (let [tag (resolve (:tag (meta name) 'Object))]
-                    [(with-meta name {:tag 'IBind})
-                     `(wrap-scope (Scoped/forType ~tag))]))
-                names)]
-    `(let [~@scopes]
-       (in-scope ~bindings ~@body))))
-
-(comment
-  (with-scope [b 2 a 3]
-    (+ @a @b))
-  (with-scope [^Long b 2 ^Long a 3]
-    (+ @a @b)))
-
+   (java.time Instant)
+   (java.util List)
+   (java.util.concurrent ThreadPoolExecutor ThreadFactory ThreadExecutor Executor Executors)
+   (java.lang Continuation ContinuationScope Thread ThreadGroup Scoped)))
 
 (def ^ThreadFactory tf (doto (Thread/builder) .virtual .factory))
 
@@ -147,9 +72,34 @@
        (isDone [_] (.isDone fut))
        (cancel [_ interrupt?] (.cancel fut interrupt?))))))
 
+(defn futures-call
+  ([tasks]
+   (future-call ex tasks))
+  ([^Executor ex tasks]
+   (let [fs (mapv binding-conveyor-fn tasks)
+         fut (.submitTasks ex ^Callable fs)]
+     (reify
+       clojure.lang.IDeref
+       (deref [_] (deref-future fut))
+       clojure.lang.IBlockingDeref
+       (deref
+           [_ timeout-ms timeout-val]
+         (deref-future fut timeout-ms timeout-val))
+       clojure.lang.IPending
+       (isRealized [_] (.isDone fut))
+       java.util.concurrent.Future
+       (get [_] (.get fut))
+       (get [_ timeout unit] (.get fut timeout unit))
+       (isCancelled [_] (.isCancelled fut))
+       (isDone [_] (.isDone fut))
+       (cancel [_ interrupt?] (.cancel fut interrupt?))))))
+
 (defn submit* [ex f] (future-call ex f))
 (defmacro submit [ex & body]
   `(future-call ~ex (^{:once true} fn* [] ~@body)))
+
+(defmacro submit-tasks [ex bodies]
+  `(futures-call ~ex ()(^{:once true} fn* [] ~@body)))
 
 (defmacro vfuture
   "Takes a body of expressions and yields a future object that will
@@ -215,6 +165,14 @@
                 `(future-call ~e (^{:once true} fn* [] ~task)))]
     `(with-open [~e (Executors/newVirtualThreadExecutor)]
        ~@tasks)))
+
+(defmacro do-concurrently
+  [& tasks]
+  (let [e (gensym "e__")
+        tasks (for [task tasks]
+                `(future-call ~e (^{:once true} fn* [] ~task)))]
+    `(with-open [~e (Executors/newVirtualThreadExecutor)]
+       `())))
 
 (comment
   (with-tasks
